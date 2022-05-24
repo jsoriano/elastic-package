@@ -67,6 +67,11 @@ func setupStackCommand() *cobraext.Command {
 				return errors.Wrap(err, "validating services failed")
 			}
 
+			retries, err := cmd.Flags().GetInt(cobraext.StackRetriesFlagName)
+			if err != nil {
+				return cobraext.FlagParsingError(err, cobraext.StackRetriesFlagName)
+			}
+
 			stackVersion, err := cmd.Flags().GetString(cobraext.StackVersionFlagName)
 			if err != nil {
 				return cobraext.FlagParsingError(err, cobraext.StackVersionFlagName)
@@ -96,6 +101,7 @@ func setupStackCommand() *cobraext.Command {
 				StackVersion: stackVersion,
 				Services:     services,
 				Profile:      usrProfile,
+				Retries:      retries,
 			})
 			if err != nil {
 				return errors.Wrap(err, "booting up the stack failed")
@@ -108,6 +114,7 @@ func setupStackCommand() *cobraext.Command {
 	upCommand.Flags().BoolP(cobraext.DaemonModeFlagName, "d", false, cobraext.DaemonModeFlagDescription)
 	upCommand.Flags().StringSliceP(cobraext.StackServicesFlagName, "s", nil,
 		fmt.Sprintf(cobraext.StackServicesFlagDescription, strings.Join(availableServicesAsList(), ",")))
+	upCommand.Flags().IntP(cobraext.StackRetriesFlagName, "", 0, cobraext.StackRetriesFlagDescription)
 	upCommand.Flags().StringP(cobraext.StackVersionFlagName, "", install.DefaultStackVersion, cobraext.StackVersionFlagDescription)
 
 	downCommand := &cobra.Command{

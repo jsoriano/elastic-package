@@ -113,6 +113,9 @@ const (
 	StackServicesFlagName        = "services"
 	StackServicesFlagDescription = "component services (comma-separated values: \"%s\")"
 
+	StackRetriesFlagName        = "retries"
+	StackRetriesFlagDescription = "number of retries if the stack fails to start, stack is recreated on retry"
+
 	StackVersionFlagName        = "version"
 	StackVersionFlagDescription = "stack version"
 

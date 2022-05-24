@@ -14,4 +14,6 @@ type Options struct {
 	Services []string
 
 	Profile *profile.Profile
+
+	Retries int
 }

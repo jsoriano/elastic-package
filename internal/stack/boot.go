@@ -57,9 +57,29 @@ func BootUp(options Options) error {
 
 	err = dockerComposeUp(options)
 	if err != nil {
+		if options.Retries > 0 {
+			fmt.Printf("Failed to start, will retry: %s\n", err)
+			return bootUpRetry(options)
+		}
 		return errors.Wrap(err, "running docker-compose failed")
 	}
 	return nil
+}
+
+// bootUpRetry retries to start the stack.
+func bootUpRetry(options Options) (err error) {
+	for i := 0; i < options.Retries; i++ {
+		err = TearDown(options)
+		if err != nil {
+			return err
+		}
+
+		err = dockerComposeUp(options)
+		if err == nil {
+			break
+		}
+	}
+	return
 }
 
 // TearDown function takes down the testing stack.
