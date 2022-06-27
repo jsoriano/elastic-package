@@ -5,6 +5,7 @@
 package version
 
 import (
+	"fmt"
 	"runtime/debug"
 	"strconv"
 	"time"
@@ -21,15 +22,27 @@ var (
 	Tag string
 )
 
-// Set Tag to version stored in modinfo if it is not available from the builder.
+// Get missing information from modinfo if it has not been set with ldflags.
 func init() {
-	if Tag != "" {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
 		return
 	}
-	info, ok := debug.ReadBuildInfo()
-	if ok && info.Main.Version != "(devel)" {
-		Tag = info.Main.Version
+	if Tag == "" {
+		if info.Main.Version != "(devel)" {
+			Tag = info.Main.Version
+		}
 	}
+	if CommitHash == "undefined" {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				CommitHash = setting.Value
+				break
+			}
+		}
+	}
+
+	fmt.Println(info)
 }
 
 // BuildTimeFormatted method returns the build time preserving the RFC3339 format.
