@@ -72,7 +72,7 @@ type agentPoliciesDumpSuite struct {
 func (s *agentPoliciesDumpSuite) SetupTest() {
 	_, err := os.Stat(s.DumpDirAll)
 	if errors.Is(err, os.ErrNotExist) {
-		client, err := kibana.NewClient()
+		client, err := kibana.NewClient(kibana.FromEnv())
 		s.Require().NoError(err)
 
 		dumper := NewAgentPoliciesDumper(client)
@@ -85,7 +85,7 @@ func (s *agentPoliciesDumpSuite) SetupTest() {
 
 	_, err = os.Stat(s.DumpDirPackage)
 	if errors.Is(err, os.ErrNotExist) {
-		client, err := kibana.NewClient()
+		client, err := kibana.NewClient(kibana.FromEnv())
 		s.Require().NoError(err)
 
 		dumper := NewAgentPoliciesDumper(client)
@@ -98,7 +98,7 @@ func (s *agentPoliciesDumpSuite) SetupTest() {
 
 	_, err = os.Stat(s.DumpDirAgentPolicy)
 	if errors.Is(err, os.ErrNotExist) {
-		client, err := kibana.NewClient()
+		client, err := kibana.NewClient(kibana.FromEnv())
 		s.Require().NoError(err)
 
 		dumper := NewAgentPoliciesDumper(client)

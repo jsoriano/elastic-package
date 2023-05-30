@@ -10,6 +10,7 @@ import (
 
 	"github.com/pkg/errors"
 
+	"github.com/elastic/elastic-package/internal/kibana"
 	"github.com/elastic/elastic-package/internal/logger"
 	"github.com/elastic/elastic-package/internal/packages"
 	"github.com/elastic/elastic-package/internal/packages/installer"
@@ -28,6 +29,8 @@ const (
 type runner struct {
 	testFolder      testrunner.TestFolder
 	packageRootPath string
+
+	kibana *kibana.Client
 
 	// Execution order of following handlers is defined in runner.tearDown() method.
 	removePackageHandler func() error
@@ -53,6 +56,7 @@ func (r runner) CanRunPerDataStream() bool {
 func (r runner) Run(options testrunner.TestOptions) ([]testrunner.TestResult, error) {
 	r.testFolder = options.TestFolder
 	r.packageRootPath = options.PackageRootPath
+	r.kibana = options.Kibana
 
 	return r.run()
 }
@@ -82,7 +86,7 @@ func (r *runner) run() ([]testrunner.TestResult, error) {
 		return result.WithError(errors.Wrapf(err, "reading package manifest failed (path: %s)", r.packageRootPath))
 	}
 
-	packageInstaller, err := installer.CreateForManifest(manifest.Name, manifest.Version)
+	packageInstaller, err := installer.CreateForManifest(manifest.Name, manifest.Version, r.kibana)
 	if err != nil {
 		return result.WithError(errors.Wrap(err, "can't create the package installer"))
 	}

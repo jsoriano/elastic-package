@@ -16,6 +16,7 @@ import (
 	"github.com/elastic/elastic-package/internal/cobraext"
 	"github.com/elastic/elastic-package/internal/common"
 	"github.com/elastic/elastic-package/internal/elasticsearch"
+	"github.com/elastic/elastic-package/internal/kibana"
 	"github.com/elastic/elastic-package/internal/packages"
 	"github.com/elastic/elastic-package/internal/signal"
 	"github.com/elastic/elastic-package/internal/testrunner"
@@ -207,13 +208,18 @@ func testTypeCommandActionFactory(runner testrunner.TestRunner) cobraext.Command
 
 		variantFlag, _ := cmd.Flags().GetString(cobraext.VariantFlagName)
 
-		esClient, err := elasticsearch.NewClient()
+		esClient, err := elasticsearch.NewClient(elasticsearch.OptionsFromEnv())
 		if err != nil {
 			return errors.Wrap(err, "can't create Elasticsearch client")
 		}
 		err = esClient.CheckHealth(cmd.Context())
 		if err != nil {
 			return err
+		}
+
+		kibanaClient, err := kibana.NewClient(kibana.FromEnv())
+		if err != nil {
+			return errors.Wrap(err, "can't create Kibana client")
 		}
 
 		var results []testrunner.TestResult
@@ -223,6 +229,7 @@ func testTypeCommandActionFactory(runner testrunner.TestRunner) cobraext.Command
 				PackageRootPath:    packageRootPath,
 				GenerateTestResult: generateTestResult,
 				API:                esClient.API,
+				Kibana:             kibanaClient,
 				DeferCleanup:       deferCleanup,
 				ServiceVariant:     variantFlag,
 				WithCoverage:       testCoverage,

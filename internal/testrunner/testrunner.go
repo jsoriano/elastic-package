@@ -15,6 +15,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/elastic/elastic-package/internal/elasticsearch"
+	"github.com/elastic/elastic-package/internal/kibana"
 )
 
 // TestType represents the various supported test types
@@ -26,6 +27,7 @@ type TestOptions struct {
 	PackageRootPath    string
 	GenerateTestResult bool
 	API                *elasticsearch.API
+	Kibana             *kibana.Client
 
 	DeferCleanup   time.Duration
 	ServiceVariant string

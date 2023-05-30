@@ -48,22 +48,44 @@ type clientOptions struct {
 	skipTLSVerify bool
 }
 
-// defaultOptionsFromEnv returns clientOptions initialized with values from environmet variables.
-func defaultOptionsFromEnv() clientOptions {
-	return clientOptions{
-		address:              os.Getenv(stack.ElasticsearchHostEnv),
-		username:             os.Getenv(stack.ElasticsearchUsernameEnv),
-		password:             os.Getenv(stack.ElasticsearchPasswordEnv),
-		certificateAuthority: os.Getenv(stack.CACertificateEnv),
+type ClientOption func(*clientOptions)
+
+// OptionsFromEnv sets values from environmet variables.
+func OptionsFromEnv() ClientOption {
+	return func(options *clientOptions) {
+		if address, found := os.LookupEnv(stack.ElasticsearchHostEnv); found {
+			options.address = address
+		}
+		if username, found := os.LookupEnv(stack.ElasticsearchUsernameEnv); found {
+			options.username = username
+		}
+		if password, found := os.LookupEnv(stack.ElasticsearchPasswordEnv); found {
+			options.password = password
+		}
+		if ca, found := os.LookupEnv(stack.CACertificateEnv); found {
+			options.certificateAuthority = ca
+		}
 	}
 }
-
-type ClientOption func(*clientOptions)
 
 // OptionWithAddress sets the address to be used by the client.
 func OptionWithAddress(address string) ClientOption {
 	return func(opts *clientOptions) {
 		opts.address = address
+	}
+}
+
+// OptionWithUsername sets the username to be used by the client.
+func OptionWithUsername(username string) ClientOption {
+	return func(opts *clientOptions) {
+		opts.username = username
+	}
+}
+
+// OptionWithPassword sets the password to be used by the client.
+func OptionWithPassword(password string) ClientOption {
+	return func(opts *clientOptions) {
+		opts.password = password
 	}
 }
 
@@ -88,7 +110,7 @@ type Client struct {
 
 // NewClient method creates new instance of the Elasticsearch client.
 func NewClient(customOptions ...ClientOption) (*Client, error) {
-	options := defaultOptionsFromEnv()
+	var options clientOptions
 	for _, option := range customOptions {
 		option(&options)
 	}

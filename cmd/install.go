@@ -56,7 +56,7 @@ func installCommandAction(cmd *cobra.Command, _ []string) error {
 		return cobraext.FlagParsingError(err, cobraext.BuildSkipValidationFlagName)
 	}
 
-	kibanaClient, err := kibana.NewClient()
+	kibanaClient, err := kibana.NewClient(kibana.FromEnv())
 	if err != nil {
 		return errors.Wrap(err, "could not create kibana client")
 	}

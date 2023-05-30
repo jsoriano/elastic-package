@@ -54,7 +54,7 @@ func pathForURL(url string) string {
 }
 
 func recordRequest(t *testing.T, r *http.Request, path string) {
-	client, err := NewClient()
+	client, err := NewClient(FromEnv())
 	require.NoError(t, err)
 
 	t.Logf("Recording %s in %s", r.URL.RequestURI(), path)

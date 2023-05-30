@@ -9,9 +9,6 @@ import (
 	"strings"
 
 	"github.com/dustin/go-humanize"
-
-	"github.com/elastic/elastic-package/internal/corpusgenerator"
-
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 
@@ -21,6 +18,7 @@ import (
 	_ "github.com/elastic/elastic-package/internal/benchrunner/runners" // register all benchmark runners
 	"github.com/elastic/elastic-package/internal/cobraext"
 	"github.com/elastic/elastic-package/internal/common"
+	"github.com/elastic/elastic-package/internal/corpusgenerator"
 	"github.com/elastic/elastic-package/internal/elasticsearch"
 	"github.com/elastic/elastic-package/internal/packages"
 	"github.com/elastic/elastic-package/internal/signal"
@@ -165,7 +163,7 @@ func benchTypeCommandActionFactory(runner benchrunner.BenchRunner) cobraext.Comm
 			return fmt.Errorf("no %s benchmarks found", benchType)
 		}
 
-		esClient, err := elasticsearch.NewClient()
+		esClient, err := elasticsearch.NewClient(elasticsearch.OptionsFromEnv())
 		if err != nil {
 			return errors.Wrap(err, "can't create Elasticsearch client")
 		}

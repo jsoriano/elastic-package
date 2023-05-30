@@ -16,7 +16,6 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/elastic/elastic-package/internal/install"
-	"github.com/elastic/elastic-package/internal/kibana"
 	"github.com/elastic/elastic-package/internal/kind"
 	"github.com/elastic/elastic-package/internal/kubectl"
 	"github.com/elastic/elastic-package/internal/logger"
@@ -89,7 +88,7 @@ func (ksd KubernetesServiceDeployer) SetUp(ctxt ServiceContext) (DeployedService
 		return nil, errors.Wrap(err, "can't connect control plane to Elastic stack network")
 	}
 
-	err = installElasticAgentInCluster()
+	err = installElasticAgentInCluster(version)
 	if err != nil {
 		return nil, errors.Wrap(err, "can't install Elastic-Agent in the Kubernetes cluster")
 	}
@@ -143,20 +142,10 @@ func findKubernetesDefinitions(definitionsDir string) ([]string, error) {
 	return definitionPaths, nil
 }
 
-func installElasticAgentInCluster() error {
+func installElasticAgentInCluster(version string) error {
 	logger.Debug("install Elastic Agent in the Kubernetes cluster")
 
-	kibanaClient, err := kibana.NewClient()
-	if err != nil {
-		return errors.Wrap(err, "can't create Kibana client")
-	}
-
-	stackVersion, err := kibanaClient.Version()
-	if err != nil {
-		return errors.Wrap(err, "can't read Kibana injected metadata")
-	}
-
-	elasticAgentManagedYaml, err := getElasticAgentYAML(stackVersion.Version())
+	elasticAgentManagedYaml, err := getElasticAgentYAML(version)
 	if err != nil {
 		return errors.Wrap(err, "can't retrieve Kubernetes file for Elastic Agent")
 	}

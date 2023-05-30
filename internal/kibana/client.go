@@ -36,18 +36,7 @@ type ClientOption func(*Client)
 
 // NewClient creates a new instance of the client.
 func NewClient(opts ...ClientOption) (*Client, error) {
-	host := os.Getenv(stack.KibanaHostEnv)
-	username := os.Getenv(stack.ElasticsearchUsernameEnv)
-	password := os.Getenv(stack.ElasticsearchPasswordEnv)
-	certificateAuthority := os.Getenv(stack.CACertificateEnv)
-
-	c := &Client{
-		host:                 host,
-		username:             username,
-		password:             password,
-		certificateAuthority: certificateAuthority,
-	}
-
+	c := new(Client)
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -59,10 +48,42 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	return c, nil
 }
 
+// FromEnv option sets the options from the environment variables.
+func FromEnv() ClientOption {
+	return func(c *Client) {
+		if host, found := os.LookupEnv(stack.KibanaHostEnv); found {
+			c.host = host
+		}
+		if username, found := os.LookupEnv(stack.ElasticsearchUsernameEnv); found {
+			c.username = username
+		}
+		if password, found := os.LookupEnv(stack.ElasticsearchPasswordEnv); found {
+			c.password = password
+		}
+		if ca, found := os.LookupEnv(stack.CACertificateEnv); found {
+			c.certificateAuthority = ca
+		}
+	}
+}
+
 // Address option sets the host to use to connect to Kibana.
 func Address(address string) ClientOption {
 	return func(c *Client) {
 		c.host = address
+	}
+}
+
+// Username sets the username to use when connecting with Kibana.
+func Username(username string) ClientOption {
+	return func(c *Client) {
+		c.username = username
+	}
+}
+
+// Password sets the password to use when connecting with Kibana.
+func Password(password string) ClientOption {
+	return func(c *Client) {
+		c.password = password
 	}
 }
 

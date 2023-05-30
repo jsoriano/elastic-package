@@ -76,7 +76,9 @@ func dumpInstalledObjectsCmdAction(cmd *cobra.Command, args []string) error {
 
 	tlsSkipVerify, _ := cmd.Flags().GetBool(cobraext.TLSSkipVerifyFlagName)
 
-	var clientOptions []elasticsearch.ClientOption
+	clientOptions := []elasticsearch.ClientOption{
+		elasticsearch.OptionsFromEnv(),
+	}
 	if tlsSkipVerify {
 		clientOptions = append(clientOptions, elasticsearch.OptionWithSkipTLSVerify())
 	}
@@ -116,7 +118,9 @@ func dumpAgentPoliciesCmdAction(cmd *cobra.Command, args []string) error {
 
 	tlsSkipVerify, _ := cmd.Flags().GetBool(cobraext.TLSSkipVerifyFlagName)
 
-	var clientOptions []kibana.ClientOption
+	clientOptions := []kibana.ClientOption{
+		kibana.FromEnv(),
+	}
 	if tlsSkipVerify {
 		clientOptions = append(clientOptions, kibana.TLSSkipVerify())
 	}

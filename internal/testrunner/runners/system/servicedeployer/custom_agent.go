@@ -17,7 +17,6 @@ import (
 	"github.com/elastic/elastic-package/internal/docker"
 	"github.com/elastic/elastic-package/internal/files"
 	"github.com/elastic/elastic-package/internal/install"
-	"github.com/elastic/elastic-package/internal/kibana"
 	"github.com/elastic/elastic-package/internal/logger"
 	"github.com/elastic/elastic-package/internal/stack"
 )
@@ -53,23 +52,13 @@ func (d *CustomAgentDeployer) SetUp(inCtxt ServiceContext) (DeployedService, err
 		return nil, errors.Wrap(err, "can't read application configuration")
 	}
 
-	kibanaClient, err := kibana.NewClient()
-	if err != nil {
-		return nil, errors.Wrap(err, "can't create Kibana client")
-	}
-
-	stackVersion, err := kibanaClient.Version()
-	if err != nil {
-		return nil, errors.Wrap(err, "can't read Kibana injected metadata")
-	}
-
 	caCertPath, ok := os.LookupEnv(stack.CACertificateEnv)
 	if !ok {
 		return nil, errors.Wrapf(err, "can't locate CA certificate: %s environment variable not set", stack.CACertificateEnv)
 	}
 
 	env := append(
-		appConfig.StackImageRefs(stackVersion.Version()).AsEnv(),
+		appConfig.StackImageRefs(version).AsEnv(),
 		fmt.Sprintf("%s=%s", serviceLogsDirEnv, inCtxt.Logs.Folder.Local),
 		fmt.Sprintf("%s=%s", localCACertEnv, caCertPath),
 	)
