@@ -173,9 +173,14 @@ func (r *runner) run() (results []testrunner.TestResult, err error) {
 		return result.WithError(errors.Wrap(err, "can't read service variant"))
 	}
 
+	stackVersion, err := r.options.Kibana.Version()
+	if err != nil {
+		return result.WithError(erros.Wrap(err, "can't get Kibana version"))
+	}
+
 	for _, cfgFile := range cfgFiles {
 		for _, variantName := range r.selectVariants(variantsFile) {
-			partial, err := r.runTestPerVariant(result, locationManager, cfgFile, dataStreamPath, variantName)
+			partial, err := r.runTestPerVariant(result, locationManager, cfgFile, dataStreamPath, variantName, stackVersion.Version())
 			results = append(results, partial...)
 			if err != nil {
 				return results, err
@@ -185,7 +190,7 @@ func (r *runner) run() (results []testrunner.TestResult, err error) {
 	return results, nil
 }
 
-func (r *runner) runTestPerVariant(result *testrunner.ResultComposer, locationManager *locations.LocationManager, cfgFile, dataStreamPath, variantName string) ([]testrunner.TestResult, error) {
+func (r *runner) runTestPerVariant(result *testrunner.ResultComposer, locationManager *locations.LocationManager, cfgFile, dataStreamPath, variantName string, stackVersion string) ([]testrunner.TestResult, error) {
 	serviceOptions := servicedeployer.FactoryOptions{
 		PackageRootPath:    r.options.PackageRootPath,
 		DataStreamRootPath: dataStreamPath,
@@ -197,6 +202,7 @@ func (r *runner) runTestPerVariant(result *testrunner.ResultComposer, locationMa
 	ctxt.Logs.Folder.Local = locationManager.ServiceLogDir()
 	ctxt.Logs.Folder.Agent = ServiceLogsAgentDir
 	ctxt.Test.RunID = createTestRunID()
+	ctx.Agent.Version = stackVersion
 	testConfig, err := newConfig(filepath.Join(r.options.TestFolder.Path, cfgFile), ctxt, variantName)
 	if err != nil {
 		return result.WithError(errors.Wrapf(err, "unable to load system test case file '%s'", cfgFile))
