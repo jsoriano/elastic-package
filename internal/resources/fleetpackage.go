@@ -36,21 +36,21 @@ func (f *FleetPackage) String() string {
 	return fmt.Sprintf("[FleetPackage:%s:%s]", f.Provider, f.RootPath)
 }
 
-func (f *FleetPackage) provider(ctx resource.Context) (*KibanaProvider, error) {
+func (f *FleetPackage) provider(scope resource.Scope) (*KibanaProvider, error) {
 	name := f.Provider
 	if name == "" {
 		name = DefaultKibanaProviderName
 	}
 	var provider *KibanaProvider
-	ok := ctx.Provider(name, &provider)
+	ok := scope.Provider(name, &provider)
 	if !ok {
 		return nil, fmt.Errorf("provider %q must be explicitly defined", name)
 	}
 	return provider, nil
 }
 
-func (f *FleetPackage) installer(ctx resource.Context) (installer.Installer, error) {
-	provider, err := f.provider(ctx)
+func (f *FleetPackage) installer(scope resource.Scope) (installer.Installer, error) {
+	provider, err := f.provider(scope)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +62,8 @@ func (f *FleetPackage) installer(ctx resource.Context) (installer.Installer, err
 	})
 }
 
-func (f *FleetPackage) Get(ctx resource.Context) (current resource.ResourceState, err error) {
-	provider, err := f.provider(ctx)
+func (f *FleetPackage) Get(ctx context.Context, scope resource.Scope) (current resource.ResourceState, err error) {
+	provider, err := f.provider(scope)
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +97,8 @@ func (f *FleetPackage) Get(ctx resource.Context) (current resource.ResourceState
 	}, nil
 }
 
-func (f *FleetPackage) Create(ctx resource.Context) error {
-	installer, err := f.installer(ctx)
+func (f *FleetPackage) Create(ctx context.Context, scope resource.Scope) error {
+	installer, err := f.installer(scope)
 	if err != nil {
 		return err
 	}
@@ -106,13 +106,13 @@ func (f *FleetPackage) Create(ctx resource.Context) error {
 	_, err = installer.Install(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			provider, uninstallErr := f.provider(ctx)
+			provider, uninstallErr := f.provider(scope)
 			if uninstallErr != nil {
 				return fmt.Errorf("failed to get client (%w) after installation failed: %w", uninstallErr, err)
 			}
 
 			// Using uninstallPachage instead of f.uninstall because we want to pass a context without cancellation.
-			uninstallErr = uninstallPackage(context.WithoutCancel(ctx), provider.Client, f.RootPath)
+			uninstallErr = uninstallPackage(context.WithoutCancel(ctx), scope, provider.Client, f.RootPath)
 			if uninstallErr != nil {
 				return fmt.Errorf("failed to uninstall package (%w) after installation failed: %w", uninstallErr, err)
 			}
@@ -123,16 +123,16 @@ func (f *FleetPackage) Create(ctx resource.Context) error {
 	return nil
 }
 
-func (f *FleetPackage) uninstall(ctx resource.Context) error {
-	provider, err := f.provider(ctx)
+func (f *FleetPackage) uninstall(ctx context.Context, scope resource.Scope) error {
+	provider, err := f.provider(scope)
 	if err != nil {
 		return err
 	}
 
-	return uninstallPackage(ctx, provider.Client, f.RootPath)
+	return uninstallPackage(ctx, scope, provider.Client, f.RootPath)
 }
 
-func uninstallPackage(ctx context.Context, client *kibana.Client, rootPath string) error {
+func uninstallPackage(ctx context.Context, scope resource.Scope, client *kibana.Client, rootPath string) error {
 	manifest, err := packages.ReadPackageManifestFromPackageRoot(rootPath)
 	if err != nil {
 		return fmt.Errorf("failed to read manifest from %s: %w", rootPath, err)
@@ -145,12 +145,12 @@ func uninstallPackage(ctx context.Context, client *kibana.Client, rootPath strin
 	return nil
 }
 
-func (f *FleetPackage) Update(ctx resource.Context) error {
+func (f *FleetPackage) Update(ctx context.Context, scope resource.Scope) error {
 	if f.Absent {
-		return f.uninstall(ctx)
+		return f.uninstall(ctx, scope)
 	}
 
-	return f.Create(ctx)
+	return f.Create(ctx, scope)
 }
 
 type FleetPackageState struct {
@@ -160,11 +160,11 @@ type FleetPackageState struct {
 	kibanaVersion *semver.Version
 }
 
-func (s *FleetPackageState) Found() bool {
+func (s *FleetPackageState) Found(context.Context) bool {
 	return !s.expected || (s.current != nil && s.current.Status != "not_installed")
 }
 
-func (s *FleetPackageState) NeedsUpdate(resource resource.Resource) (bool, error) {
+func (s *FleetPackageState) NeedsUpdate(_ context.Context, resource resource.Resource) (bool, error) {
 	fleetPackage := resource.(*FleetPackage)
 	if fleetPackage.Absent {
 		if s.current.Status == "not_installed" {

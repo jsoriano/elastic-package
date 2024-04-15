@@ -5,6 +5,7 @@
 package profile
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,18 +29,18 @@ type Metadata struct {
 }
 
 // profileMetadataContent generates the content of the profile.json file.
-func profileMetadataContent(applyCtx resource.Context, w io.Writer) error {
+func profileMetadataContent(_ context.Context, scope resource.Scope, w io.Writer) error {
 	currentUser, err := user.Current()
 	if err != nil {
 		return fmt.Errorf("error fetching current user: %w", err)
 	}
 
-	profileName, found := applyCtx.Fact("profile_name")
+	profileName, found := scope.Fact("profile_name")
 	if !found {
 		return errors.New("unknown profile name")
 	}
 
-	profilePath, found := applyCtx.Fact("profile_path")
+	profilePath, found := scope.Fact("profile_path")
 	if !found {
 		return errors.New("unknown profile path")
 	}

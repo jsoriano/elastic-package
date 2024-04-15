@@ -184,3 +184,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
+
+replace github.com/elastic/go-resource => github.com/jsoriano/go-resource v0.0.0-20240415202910-5bb139833190

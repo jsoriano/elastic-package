@@ -6,6 +6,7 @@ package stack
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"fmt"
 	"html/template"
@@ -204,7 +205,7 @@ func addClientCertsToResources(resourceManager *resource.Manager, certResources 
 		if strings.Contains(res.Path, ElasticAgentFolder) {
 			var buf bytes.Buffer
 			if res.Path == certPath {
-				err = res.Content(nil, &buf)
+				err = res.Content(context.TODO(), resourceManager, &buf)
 				if err != nil {
 					return fmt.Errorf("failed to read client certificate: %w", err)
 				}
@@ -213,7 +214,7 @@ func addClientCertsToResources(resourceManager *resource.Manager, certResources 
 				continue
 			}
 			if res.Path == keyPath {
-				err = res.Content(nil, &buf)
+				err = res.Content(context.TODO(), resourceManager, &buf)
 				if err != nil {
 					return fmt.Errorf("failed to read client key: %w", err)
 				}
