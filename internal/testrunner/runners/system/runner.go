@@ -781,17 +781,42 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 		return nil, fmt.Errorf("failed to find the selected policy_template: %w", err)
 	}
 
+	testTime := time.Now().Format("20060102T15:04:05Z")
+	policyName := fmt.Sprintf("ep-test-system-%s-%s-%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream, testTime)
+	service, svcInfo, err := r.setupService(ctx, config, serviceOptions, svcInfo, policyName, serviceStateData)
+	if errors.Is(err, os.ErrNotExist) {
+		logger.Debugf("No service deployer defined for this test")
+	} else if err != nil {
+		return nil, err
+	}
+
 	// Configure package (single data stream) via Fleet APIs.
+	// 8<-------
+	if r.options.RunTearDown {
+		logger.Debug("Skip installing package")
+	} else {
+		// Install the package before creating the policy, so we control exactly what is being
+		// installed.
+		logger.Debug("Installing package...")
+		resourcesOptions := resourcesOptions{
+			// Install it unless we are running the tear down only.
+			installedPackage: !r.options.RunTearDown,
+		}
+		_, err = r.resourcesManager.ApplyCtx(ctx, r.resources(resourcesOptions))
+		if err != nil {
+			return nil, fmt.Errorf("can't install the package: %w", err)
+		}
+	}
+
 	var policy *kibana.Policy
 	if r.options.RunTearDown || r.options.RunTestsOnly {
 		policy = &serviceStateData.CurrentPolicy
 		logger.Debugf("Got policy from file: %q - %q", policy.Name, policy.ID)
 	} else {
 		logger.Debug("creating test policy...")
-		testTime := time.Now().Format("20060102T15:04:05Z")
 
 		p := kibana.Policy{
-			Name:        fmt.Sprintf("ep-test-system-%s-%s-%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream, testTime),
+			Name:        policyName,
 			Description: fmt.Sprintf("test policy created by elastic-package test system for data stream %s/%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream),
 			Namespace:   "ep",
 		}
@@ -811,6 +836,17 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 		}
 		return nil
 	}
+	logger.Debug("adding package data stream to test policy...")
+	ds := createPackageDatastream(*policy, *scenario.pkgManifest, policyTemplate, *scenario.dataStreamManifest, *config)
+	if r.options.RunTearDown || r.options.RunTestsOnly {
+		logger.Debug("Skip adding data stream config to policy")
+	} else {
+		if err := r.options.KibanaClient.AddPackageDataStreamToPolicy(ctx, ds); err != nil {
+			return nil, fmt.Errorf("could not add data stream config to policy: %w", err)
+		}
+	}
+	// ------->8
+	scenario.kibanaDataStream = ds
 
 	enrollingTime := time.Now()
 	if r.options.RunTearDown || r.options.RunTestsOnly {
@@ -825,45 +861,11 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 	scenario.enrollingTime = enrollingTime
 	scenario.agent = agentDeployed
 
-	service, svcInfo, err := r.setupService(ctx, config, serviceOptions, svcInfo, agentInfo, agentDeployed, policy, serviceStateData)
-	if errors.Is(err, os.ErrNotExist) {
-		logger.Debugf("No service deployer defined for this test")
-	} else if err != nil {
-		return nil, err
-	}
-
 	// Reload test config with ctx variable substitution.
 	config, err = newConfig(config.Path, svcInfo, serviceOptions.Variant)
 	if err != nil {
 		return nil, fmt.Errorf("unable to reload system test case configuration: %w", err)
 	}
-
-	if r.options.RunTearDown {
-		logger.Debug("Skip installing package")
-	} else {
-		// Install the package before creating the policy, so we control exactly what is being
-		// installed.
-		logger.Debug("Installing package...")
-		resourcesOptions := resourcesOptions{
-			// Install it unless we are running the tear down only.
-			installedPackage: !r.options.RunTearDown,
-		}
-		_, err = r.resourcesManager.ApplyCtx(ctx, r.resources(resourcesOptions))
-		if err != nil {
-			return nil, fmt.Errorf("can't install the package: %w", err)
-		}
-	}
-
-	logger.Debug("adding package data stream to test policy...")
-	ds := createPackageDatastream(*policy, *scenario.pkgManifest, policyTemplate, *scenario.dataStreamManifest, *config)
-	if r.options.RunTearDown || r.options.RunTestsOnly {
-		logger.Debug("Skip adding data stream config to policy")
-	} else {
-		if err := r.options.KibanaClient.AddPackageDataStreamToPolicy(ctx, ds); err != nil {
-			return nil, fmt.Errorf("could not add data stream config to policy: %w", err)
-		}
-	}
-	scenario.kibanaDataStream = ds
 
 	// Delete old data
 	logger.Debug("deleting old data in data stream...")
@@ -1077,7 +1079,7 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 	return &scenario, nil
 }
 
-func (r *runner) setupService(ctx context.Context, config *testConfig, serviceOptions servicedeployer.FactoryOptions, svcInfo servicedeployer.ServiceInfo, agentInfo agentdeployer.AgentInfo, agentDeployed agentdeployer.DeployedAgent, policy *kibana.Policy, state ServiceState) (servicedeployer.DeployedService, servicedeployer.ServiceInfo, error) {
+func (r *runner) setupService(ctx context.Context, config *testConfig, serviceOptions servicedeployer.FactoryOptions, svcInfo servicedeployer.ServiceInfo, policyName string, state ServiceState) (servicedeployer.DeployedService, servicedeployer.ServiceInfo, error) {
 	logger.Debug("setting up service...")
 	if r.options.RunTearDown || r.options.RunTestsOnly {
 		svcInfo.Test.RunID = state.ServiceRunID
@@ -1097,7 +1099,7 @@ func (r *runner) setupService(ctx context.Context, config *testConfig, serviceOp
 
 	// In case of custom or kubernetes agents (servicedeployer) it is needed also the Agent Policy created
 	// for each test execution
-	serviceOptions.PolicyName = policy.Name
+	serviceOptions.PolicyName = policyName
 
 	if config.Service != "" {
 		svcInfo.Name = config.Service
