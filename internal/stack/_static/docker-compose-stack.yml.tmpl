@@ -1,7 +1,6 @@
 {{ $username := fact "username" }}
 {{ $password := fact "password" }}
 {{ $apm_enabled := fact "apm_enabled" }}
-version: '2.4'
 services:
   elasticsearch:
     image: "${ELASTICSEARCH_IMAGE_REF}"
@@ -140,6 +139,8 @@ services:
       interval: 5s
     hostname: docker-fleet-agent
     env_file: "./elastic-agent.env"
+    cap_drop:
+    - ALL
     volumes:
     - "../certs/ca-cert.pem:/etc/ssl/certs/elastic-package.pem"
     - type: bind
