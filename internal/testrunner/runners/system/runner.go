@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -265,11 +264,26 @@ func (r *runner) Run(ctx context.Context, options testrunner.TestOptions) ([]tes
 }
 
 type resourcesOptions struct {
+	policyName       string
+	policyID         string
 	installedPackage bool
 }
 
 func (r *runner) resources(opts resourcesOptions) resources.Resources {
+	dataOutputID = ""
+	if r.options.Profile.Config("stack.logstash_enabled", "false") == "true" {
+		dataOutputID = "fleet-logstash-output"
+	}
 	return resources.Resources{
+		&resources.FleetAgentPolicy{
+			Name:         opts.policyName,
+			ID:           opts.policyID,
+			Description:  fmt.Sprintf("test policy created by elastic-package to enroll agent for data stream %s/%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream),
+			DataOutputID: dataOutputID,
+			PackagePolicies: []resources.FleetPackagePolicy{
+				{},
+			},
+		},
 		&resources.FleetPackage{
 			RootPath: r.options.PackageRootPath,
 			Absent:   !opts.installedPackage,
@@ -386,6 +400,11 @@ func (r *runner) tearDownTest(ctx context.Context) error {
 		}
 	}
 
+	state, err := r.readServiceStateData()
+	if err != nil {
+		return fmt.Errorf("failed to read state during tear down: %w", err)
+	}
+
 	// Avoid cancellations during cleanup.
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -418,10 +437,12 @@ func (r *runner) tearDownTest(ctx context.Context) error {
 	}
 
 	resourcesOptions := resourcesOptions{
+		policyName: state.CurrentPolicy.Name,
+		policyID:   state.CurrentPolicy.ID,
 		// Keep it installed only if we were running setup, or tests only.
 		installedPackage: r.options.RunSetup || r.options.RunTestsOnly,
 	}
-	_, err := r.resourcesManager.ApplyCtx(cleanupCtx, r.resources(resourcesOptions))
+	_, err = r.resourcesManager.ApplyCtx(cleanupCtx, r.resources(resourcesOptions))
 	if err != nil {
 		return err
 	}
@@ -885,8 +906,6 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 		}
 	}
 	// ------->8
-	scenario.kibanaDataStream = ds
-
 	if r.options.RunTearDown {
 		logger.Debug("Skip installing package")
 	} else {
@@ -894,6 +913,8 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 		// installed.
 		logger.Debug("Installing package...")
 		resourcesOptions := resourcesOptions{
+			policyName: policyToTest.Name,
+			policyID:   policyToTest.ID,
 			// Install it unless we are running the tear down only.
 			installedPackage: !r.options.RunTearDown,
 		}
@@ -902,6 +923,8 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 			return nil, fmt.Errorf("can't install the package: %w", err)
 		}
 	}
+
+	scenario.kibanaDataStream = ds
 
 	// store the time just before adding the Test Policy, this time will be used to check
 	// the agent logs from that time onwards to avoid possible previous errors present in logs
@@ -1594,113 +1617,6 @@ func setKibanaVariables(definitions []packages.Variable, values common.MapStr) k
 		}
 	}
 	return vars
-}
-
-// getDataStreamIndex returns the index of the data stream whose input name
-// matches. Otherwise it returns the 0.
-func getDataStreamIndex(inputName string, ds packages.DataStreamManifest) int {
-	for i, s := range ds.Streams {
-		if s.Input == inputName {
-			return i
-		}
-	}
-	return 0
-}
-
-func getDataStreamDataset(pkg packages.PackageManifest, ds packages.DataStreamManifest) string {
-	if len(ds.Dataset) > 0 {
-		return ds.Dataset
-	}
-	return fmt.Sprintf("%s.%s", pkg.Name, ds.Name)
-}
-
-// findPolicyTemplateForInput returns the name of the policy_template that
-// applies to the input under test. An error is returned if no policy template
-// matches or if multiple policy templates match and the response is ambiguous.
-func findPolicyTemplateForInput(pkg packages.PackageManifest, ds packages.DataStreamManifest, inputName string) (string, error) {
-	if pkg.Type == "input" {
-		return findPolicyTemplateForInputPackage(pkg, inputName)
-	}
-	return findPolicyTemplateForDataStream(pkg, ds, inputName)
-}
-
-func findPolicyTemplateForDataStream(pkg packages.PackageManifest, ds packages.DataStreamManifest, inputName string) (string, error) {
-	if inputName == "" {
-		if len(ds.Streams) == 0 {
-			return "", errors.New("no streams declared in data stream manifest")
-		}
-		inputName = ds.Streams[getDataStreamIndex(inputName, ds)].Input
-	}
-
-	var matchedPolicyTemplates []string
-	for _, policyTemplate := range pkg.PolicyTemplates {
-		// Does this policy_template include this input type?
-		if policyTemplate.FindInputByType(inputName) == nil {
-			continue
-		}
-
-		// Does the policy_template apply to this data stream (when data streams are specified)?
-		if len(policyTemplate.DataStreams) > 0 && !slices.Contains(policyTemplate.DataStreams, ds.Name) {
-			continue
-		}
-
-		matchedPolicyTemplates = append(matchedPolicyTemplates, policyTemplate.Name)
-	}
-
-	switch len(matchedPolicyTemplates) {
-	case 1:
-		return matchedPolicyTemplates[0], nil
-	case 0:
-		return "", fmt.Errorf("no policy template was found for data stream %q "+
-			"with input type %q: verify that you have included the data stream "+
-			"and input in the package's policy_template list", ds.Name, inputName)
-	default:
-		return "", fmt.Errorf("ambiguous result: multiple policy templates ([%s]) "+
-			"were found that apply to data stream %q with input type %q: please "+
-			"specify the 'policy_template' in the system test config",
-			strings.Join(matchedPolicyTemplates, ", "), ds.Name, inputName)
-	}
-}
-
-func findPolicyTemplateForInputPackage(pkg packages.PackageManifest, inputName string) (string, error) {
-	if inputName == "" {
-		if len(pkg.PolicyTemplates) == 0 {
-			return "", errors.New("no policy templates specified for input package")
-		}
-		inputName = pkg.PolicyTemplates[0].Input
-	}
-
-	var matched []string
-	for _, policyTemplate := range pkg.PolicyTemplates {
-		if policyTemplate.Input != inputName {
-			continue
-		}
-
-		matched = append(matched, policyTemplate.Name)
-	}
-
-	switch len(matched) {
-	case 1:
-		return matched[0], nil
-	case 0:
-		return "", fmt.Errorf("no policy template was found"+
-			"with input type %q: verify that you have included the data stream "+
-			"and input in the package's policy_template list", inputName)
-	default:
-		return "", fmt.Errorf("ambiguous result: multiple policy templates ([%s]) "+
-			"with input type %q: please "+
-			"specify the 'policy_template' in the system test config",
-			strings.Join(matched, ", "), inputName)
-	}
-}
-
-func selectPolicyTemplateByName(policies []packages.PolicyTemplate, name string) (packages.PolicyTemplate, error) {
-	for _, policy := range policies {
-		if policy.Name == name {
-			return policy, nil
-		}
-	}
-	return packages.PolicyTemplate{}, fmt.Errorf("policy template %q not found", name)
 }
 
 func (r *runner) checkTransforms(ctx context.Context, config *testConfig, pkgManifest *packages.PackageManifest, ds kibana.PackageDataStream, dataStream string) error {
