@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -270,7 +271,7 @@ type resourcesOptions struct {
 }
 
 func (r *runner) resources(opts resourcesOptions) resources.Resources {
-	dataOutputID = ""
+	dataOutputID := ""
 	if r.options.Profile.Config("stack.logstash_enabled", "false") == "true" {
 		dataOutputID = "fleet-logstash-output"
 	}
@@ -872,53 +873,6 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 		return nil, fmt.Errorf("unable to reload system test case configuration: %w", err)
 	}
 
-	// Configure package (single data stream) via Fleet APIs.
-	// 8<-------
-	var policyToTest *kibana.Policy
-	if r.options.RunTearDown || r.options.RunTestsOnly {
-		policyToTest = &serviceStateData.CurrentPolicy
-		logger.Debugf("Got policy from file: %q - %q", policyToTest.Name, policyToTest.ID)
-	} else {
-		// Create two different policies, one for enrolling the agent and the other for testing.
-		// This allows us to ensure that the Agent Policy used for testing is
-		// assigned to the agent with all the required changes (e.g. Package DataStream)
-		logger.Debug("creating test policies...")
-		policyTest := kibana.Policy{
-			Name:        policyToTestName,
-			Description: fmt.Sprintf("test policy created by elastic-package test system for data stream %s/%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream),
-			Namespace:   "ep",
-		}
-		// Assign the data_output_id to the agent policy to configure the output to logstash. The value is inferred from stack/_static/kibana.yml.tmpl
-		if r.options.Profile.Config("stack.logstash_enabled", "false") == "true" {
-			policyTest.DataOutputID = "fleet-logstash-output"
-		}
-		policyToTest, err = r.options.KibanaClient.CreatePolicy(ctx, policyTest)
-		if err != nil {
-			return nil, fmt.Errorf("could not create test policy: %w", err)
-		}
-
-		// Required in order to be able select the right agent in `checkEnrolledAgents` when
-		// using independent agents or custom/kubernetes agents since policy data is set into `agentInfo` variable`
-		agentInfo.Policy.ID = policyToTest.ID
-		agentInfo.Policy.Name = policyToTest.Name
-	}
-	r.deleteTestPolicyHandler = func(ctx context.Context) error {
-		logger.Debug("deleting test policies...")
-		if err := r.options.KibanaClient.DeletePolicy(ctx, *policyToTest); err != nil {
-			return fmt.Errorf("error cleaning up test policy: %w", err)
-		}
-		return nil
-	}
-	logger.Debug("adding package data stream to test policy...")
-	ds := createPackageDatastream(*policyToTest, *scenario.pkgManifest, policyTemplate, *scenario.dataStreamManifest, *config)
-	if r.options.RunTearDown || r.options.RunTestsOnly {
-		logger.Debug("Skip adding data stream config to policy")
-	} else {
-		if err := r.options.KibanaClient.AddPackageDataStreamToPolicy(ctx, ds); err != nil {
-			return nil, fmt.Errorf("could not add data stream config to policy: %w", err)
-		}
-	}
-	// ------->8
 	if r.options.RunTearDown {
 		logger.Debug("Skip installing package")
 	} else {
@@ -926,8 +880,8 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 		// installed.
 		logger.Debug("Installing package...")
 		resourcesOptions := resourcesOptions{
-			policyName: policyToTest.Name,
-			policyID:   policyToTest.ID,
+			policyName: policyToTestName,
+			policyID:   serviceStateData.CurrentPolicy.ID,
 			// Install it unless we are running the tear down only.
 			installedPackage: !r.options.RunTearDown,
 		}
@@ -1503,60 +1457,6 @@ func createPackageDatastream(
 		return createInputPackageDatastream(kibanaPolicy, pkg, policyTemplate, config)
 	}
 	return createIntegrationPackageDatastream(kibanaPolicy, pkg, policyTemplate, ds, config)
-}
-
-func createIntegrationPackageDatastream(
-	kibanaPolicy kibana.Policy,
-	pkg packages.PackageManifest,
-	policyTemplate packages.PolicyTemplate,
-	ds packages.DataStreamManifest,
-	config testConfig,
-) kibana.PackageDataStream {
-	r := kibana.PackageDataStream{
-		Name:      fmt.Sprintf("%s-%s", pkg.Name, ds.Name),
-		Namespace: "ep",
-		PolicyID:  kibanaPolicy.ID,
-		Enabled:   true,
-		Inputs: []kibana.Input{
-			{
-				PolicyTemplate: policyTemplate.Name,
-				Enabled:        true,
-			},
-		},
-	}
-	r.Package.Name = pkg.Name
-	r.Package.Title = pkg.Title
-	r.Package.Version = pkg.Version
-
-	stream := ds.Streams[getDataStreamIndex(config.Input, ds)]
-	streamInput := stream.Input
-	r.Inputs[0].Type = streamInput
-
-	streams := []kibana.Stream{
-		{
-			ID:      fmt.Sprintf("%s-%s.%s", streamInput, pkg.Name, ds.Name),
-			Enabled: true,
-			DataStream: kibana.DataStream{
-				Type:    ds.Type,
-				Dataset: getDataStreamDataset(pkg, ds),
-			},
-		},
-	}
-
-	// Add dataStream-level vars
-	streams[0].Vars = setKibanaVariables(stream.Vars, config.DataStream.Vars)
-	r.Inputs[0].Streams = streams
-
-	// Add input-level vars
-	input := policyTemplate.FindInputByType(streamInput)
-	if input != nil {
-		r.Inputs[0].Vars = setKibanaVariables(input.Vars, config.Vars)
-	}
-
-	// Add package-level vars
-	r.Vars = setKibanaVariables(pkg.Vars, config.Vars)
-
-	return r
 }
 
 func createInputPackageDatastream(
