@@ -6,12 +6,16 @@ package agentdeployer
 
 import (
 	"context"
-	_ "embed"
+	"crypto/md5"
+	"embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
-	"text/template"
+	"strings"
 	"time"
+
+	"github.com/elastic/go-resource"
 
 	"github.com/elastic/elastic-package/internal/compose"
 	"github.com/elastic/elastic-package/internal/docker"
@@ -25,18 +29,22 @@ import (
 const (
 	dockerTestAgentServiceName   = "elastic-agent"
 	dockerTestAgentDockerCompose = "docker-agent-base.yml"
+	dockerTestAgentDockerfile    = "Dockerfile"
+	customScriptFilename         = "script.sh"
+	customEntrypointFilename     = "custom-entrypoint.sh"
 	defaultAgentPolicyName       = "Elastic-Agent (elastic-package)"
 )
 
-//go:embed _static/docker-agent-base.yml.tmpl
-var dockerTestAgentDockerComposeTemplate string
+//go:embed _static
+var static embed.FS
+
+var staticSource = resource.NewSourceFS(static)
 
 // CustomAgentDeployer knows how to deploy a custom elastic-agent defined via
 // a Docker Compose file.
 type DockerComposeAgentDeployer struct {
-	profile           *profile.Profile
-	dockerComposeFile string
-	stackVersion      string
+	profile      *profile.Profile
+	stackVersion string
 
 	policyName string
 
@@ -50,10 +58,9 @@ type DockerComposeAgentDeployer struct {
 }
 
 type DockerComposeAgentDeployerOptions struct {
-	Profile           *profile.Profile
-	DockerComposeFile string
-	StackVersion      string
-	PolicyName        string
+	Profile      *profile.Profile
+	StackVersion string
+	PolicyName   string
 
 	PackageName string
 	DataStream  string
@@ -77,14 +84,13 @@ var _ DeployedAgent = new(dockerComposeDeployedAgent)
 // NewCustomAgentDeployer returns a new instance of a deployedCustomAgent.
 func NewCustomAgentDeployer(options DockerComposeAgentDeployerOptions) (*DockerComposeAgentDeployer, error) {
 	return &DockerComposeAgentDeployer{
-		profile:           options.Profile,
-		dockerComposeFile: options.DockerComposeFile,
-		stackVersion:      options.StackVersion,
-		packageName:       options.PackageName,
-		dataStream:        options.DataStream,
-		policyName:        options.PolicyName,
-		runTearDown:       options.RunTearDown,
-		runTestsOnly:      options.RunTestsOnly,
+		profile:      options.Profile,
+		stackVersion: options.StackVersion,
+		packageName:  options.PackageName,
+		dataStream:   options.DataStream,
+		policyName:   options.PolicyName,
+		runTearDown:  options.RunTearDown,
+		runTestsOnly: options.RunTestsOnly,
 	}, nil
 }
 
@@ -111,25 +117,15 @@ func (d *DockerComposeAgentDeployer) SetUp(ctx context.Context, agentInfo AgentI
 		fmt.Sprintf("%s=%s", agentHostnameEnv, d.agentHostname()),
 	)
 
-	configDir, err := d.installDockerfile(agentInfo)
+	configDir, err := d.installDockerCompose(agentInfo)
 	if err != nil {
 		return nil, fmt.Errorf("could not create resources for custom agent: %w", err)
-	}
-
-	ymlPaths := []string{
-		filepath.Join(configDir, dockerTestAgentDockerCompose),
-	}
-	if d.dockerComposeFile != "" {
-		ymlPaths = []string{
-			d.dockerComposeFile,
-			filepath.Join(configDir, dockerTestAgentDockerCompose),
-		}
 	}
 
 	composeProjectName := fmt.Sprintf("elastic-package-agent-%s", d.agentName())
 
 	agent := dockerComposeDeployedAgent{
-		ymlPaths: ymlPaths,
+		ymlPaths: []string{filepath.Join(configDir, dockerTestAgentDockerCompose)},
 		project:  composeProjectName,
 		env:      env,
 	}
@@ -233,34 +229,136 @@ func (d *DockerComposeAgentDeployer) agentName() string {
 	return name
 }
 
-// installDockerfile creates the files needed to run the custom elastic agent and returns
+// installDockerCompose creates the files needed to run the custom elastic agent and returns
 // the directory with these files.
-func (d *DockerComposeAgentDeployer) installDockerfile(agentInfo AgentInfo) (string, error) {
+func (d *DockerComposeAgentDeployer) installDockerCompose(agentInfo AgentInfo) (string, error) {
 	customAgentDir, err := CreateDeployerDir(d.profile, fmt.Sprintf("docker-agent-%s-%s", d.agentName(), d.agentRunID))
 	if err != nil {
 		return "", fmt.Errorf("failed to create directory for custom agent files: %w", err)
 	}
 
-	customAgentDockerfile := filepath.Join(customAgentDir, dockerTestAgentDockerCompose)
-	file, err := os.Create(customAgentDockerfile)
-	if err != nil {
-		return "", fmt.Errorf("failed to create file (name %s): %w", customAgentDockerfile, err)
+	hashDockerfile := []byte{}
+	if agentInfo.Agent.ProvisioningScript.Contents != "" || agentInfo.Agent.PreStartScript.Contents != "" {
+		err = d.installDockerfileResources(agentInfo.Agent.AgentSettings, customAgentDir)
+		if err != nil {
+			return "", fmt.Errorf("failed to create dockerfile resources: %w", err)
+		}
+		hashDockerfile, err = hashFile(filepath.Join(customAgentDir, dockerTestAgentDockerfile))
+		if err != nil {
+			return "", fmt.Errorf("failed to obtain has for Elastic Agent Dockerfile: %w", err)
+		}
 	}
-	defer file.Close()
-
-	tmpl := template.Must(template.New(dockerTestAgentDockerCompose).Parse(dockerTestAgentDockerComposeTemplate))
-	err = tmpl.Execute(file, map[string]any{
-		"user":         agentInfo.Agent.User,
-		"capabilities": agentInfo.Agent.LinuxCapabilities,
-		"runtime":      agentInfo.Agent.Runtime,
-		"pidMode":      agentInfo.Agent.PidMode,
-		"ports":        agentInfo.Agent.Ports,
-	})
+	config, err := stack.LoadConfig(d.profile)
 	if err != nil {
-		return "", fmt.Errorf("failed to create contents of the docker-compose file %q: %w", customAgentDockerfile, err)
+		return "", fmt.Errorf("failed to load config from profile: %w", err)
+	}
+
+	fleetURL := "https://fleet-server:8220"
+	kibanaHost := "https://kibana:5601"
+	stackVersion := d.stackVersion
+	if config.Provider == stack.ProviderServerless {
+		fleetURL = config.Parameters[stack.ParamServerlessFleetURL]
+		kibanaHost = config.KibanaHost
+		stackVersion = config.Parameters[stack.ParamServerlessLocalStackVersion]
+	}
+
+	appConfig, err := install.Configuration()
+	if err != nil {
+		return "", fmt.Errorf("can't read application configuration: %w", err)
+	}
+
+	resourceManager := resource.NewManager()
+	resourceManager.AddFacter(resource.StaticFacter{
+		"agent_image":            appConfig.StackImageRefs(stackVersion).ElasticAgent,
+		"user":                   agentInfo.Agent.User,
+		"capabilities":           strings.Join(agentInfo.Agent.LinuxCapabilities, ","),
+		"runtime":                agentInfo.Agent.Runtime,
+		"pid_mode":               agentInfo.Agent.PidMode,
+		"ports":                  strings.Join(agentInfo.Agent.Ports, ","),
+		"dockerfile_hash":        hex.EncodeToString(hashDockerfile),
+		"stack_version":          stackVersion,
+		"fleet_url":              fleetURL,
+		"kibana_host":            kibanaHost,
+		"elasticsearch_username": config.ElasticsearchUsername,
+		"elasticsearch_password": config.ElasticsearchPassword,
+	})
+
+	resourceManager.RegisterProvider("file", &resource.FileProvider{
+		Prefix: customAgentDir,
+	})
+
+	agentResources := []resource.Resource{
+		&resource.File{
+			Path:    dockerTestAgentDockerCompose,
+			Content: staticSource.Template("_static/docker-agent-base.yml.tmpl"),
+		},
+	}
+	results, err := resourceManager.Apply(agentResources)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, processApplyErrors(results))
 	}
 
 	return customAgentDir, nil
+}
+
+func (d *DockerComposeAgentDeployer) installDockerfileResources(agentSettings AgentSettings, folder string) error {
+	agentResources := []resource.Resource{
+		&resource.File{
+			Path:    dockerTestAgentDockerfile,
+			Content: staticSource.Template("_static/dockerfile.tmpl"),
+		},
+	}
+	if agentSettings.ProvisioningScript.Contents != "" {
+		agentResources = append(agentResources, &resource.File{
+			Path:    customScriptFilename,
+			Mode:    resource.FileMode(0o755),
+			Content: resource.FileContentLiteral(agentSettings.ProvisioningScript.Contents),
+		})
+	}
+	if agentSettings.PreStartScript.Contents != "" {
+		agentResources = append(agentResources, &resource.File{
+			Path:    customEntrypointFilename,
+			Mode:    resource.FileMode(0o755),
+			Content: staticSource.Template("_static/custom-entrypoint.sh.tmpl"),
+		})
+	}
+	resourceManager := resource.NewManager()
+	resourceManager.AddFacter(resource.StaticFacter{
+		"provisioning_script_contents": agentSettings.ProvisioningScript.Contents,
+		"provisioning_script_language": agentSettings.ProvisioningScript.Language,
+		"provisioning_script_filename": customScriptFilename,
+		"pre_start_script_contents":    agentSettings.PreStartScript.Contents,
+		"entrypoint_script_filename":   customEntrypointFilename,
+		"agent_name":                   d.agentName(),
+	})
+
+	resourceManager.RegisterProvider("file", &resource.FileProvider{
+		Prefix: folder,
+	})
+	results, err := resourceManager.Apply(agentResources)
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, processApplyErrors(results))
+	}
+	return nil
+}
+
+func hashFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return []byte{}, err
+	}
+	dockerfileMD5 := md5.Sum(data)
+	return dockerfileMD5[:], nil
+}
+
+func processApplyErrors(results resource.ApplyResults) string {
+	var errors []string
+	for _, result := range results {
+		if err := result.Err(); err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+	return strings.Join(errors, ", ")
 }
 
 // ExitCode returns true if the agent is exited and its exit code.

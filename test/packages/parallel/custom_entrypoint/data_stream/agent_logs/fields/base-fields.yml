@@ -7,15 +7,6 @@
 - name: data_stream.namespace
   type: constant_keyword
   description: Data stream namespace.
-- name: event.module
-  type: constant_keyword
-  description: Event module
-  value: auditd
-- name: event.dataset
-  type: constant_keyword
-  description: Event dataset
-  value: auditd_manager_independent_agent.auditd
 - name: '@timestamp'
-  external: ecs
-- name: tags
-  external: ecs
+  type: date
+  description: Event timestamp.
