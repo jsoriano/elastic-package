@@ -81,7 +81,7 @@ func (f *FleetPackagePolicy) String() string {
 }
 
 func (f *FleetAgentPolicy) String() string {
-	return fmt.Sprintf("[FleetAgentPolicy:%s:%s]", f.Provider, f.Name)
+	return fmt.Sprintf("[FleetAgentPolicy:%s:%s:%s]", f.Provider, f.Name, f.ID)
 }
 
 func (f *FleetAgentPolicy) provider(ctx resource.Context) (*KibanaProvider, error) {

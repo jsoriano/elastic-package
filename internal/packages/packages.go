@@ -62,6 +62,21 @@ func (vv VarValue) MarshalJSON() ([]byte, error) {
 	return []byte("null"), nil
 }
 
+// UnmarshalJSON knows how to decode a VarValue into the appropiate
+// JSON data type and value.
+func (vv *VarValue) UnmarshalJSON(d []byte) error {
+	var v any
+	err := json.Unmarshal(d, &v)
+	if err != nil {
+		return err
+	}
+	if list, ok := v.([]any); ok {
+		vv.list = list
+	}
+	vv.scalar = v
+	return nil
+}
+
 // Variable is an instance of configuration variable (named, typed).
 type Variable struct {
 	Name    string   `config:"name" json:"name" yaml:"name"`

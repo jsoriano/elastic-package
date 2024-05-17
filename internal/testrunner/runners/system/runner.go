@@ -150,6 +150,7 @@ type runner struct {
 	// Execution order of following handlers is defined in runner.TearDown() method.
 	removeAgentHandler        func(context.Context) error
 	deleteTestPolicyHandler   func(context.Context) error
+	cleanupResources          func(context.Context) error
 	resetAgentPolicyHandler   func(context.Context) error
 	resetAgentLogLevelHandler func(context.Context) error
 	shutdownServiceHandler    func(context.Context) error
@@ -300,26 +301,42 @@ func (r *runner) Run(ctx context.Context, options testrunner.TestOptions) ([]tes
 }
 
 type resourcesOptions struct {
-	policyName       string
-	policyID         string
-	installedPackage bool
+	testConfig        *testConfig
+	policyName        string
+	policyID          string
+	packagePolicyName string
+	packageRootPath   string
+	dataStreamName    string
+	installedPackage  bool
 }
 
-func (r *runner) resources(opts resourcesOptions) resources.Resources {
+func (r *runner) resources(opts resourcesOptions) (*resources.FleetAgentPolicy, resources.Resources) {
 	dataOutputID := ""
 	if r.options.Profile.Config("stack.logstash_enabled", "false") == "true" {
 		dataOutputID = "fleet-logstash-output"
 	}
-	return resources.Resources{
-		&resources.FleetAgentPolicy{
-			Name:         opts.policyName,
-			ID:           opts.policyID,
-			Description:  fmt.Sprintf("test policy created by elastic-package to enroll agent for data stream %s/%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream),
-			DataOutputID: dataOutputID,
-			PackagePolicies: []resources.FleetPackagePolicy{
-				{},
+	templateName := ""
+	if opts.testConfig != nil {
+		templateName = opts.testConfig.PolicyTemplate
+	}
+	policyResource := resources.FleetAgentPolicy{
+		Name:         opts.policyName,
+		ID:           opts.policyID,
+		Namespace:    "ep",
+		Description:  fmt.Sprintf("test policy created by elastic-package to enroll agent for data stream %s/%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream),
+		DataOutputID: dataOutputID,
+		PackagePolicies: []resources.FleetPackagePolicy{
+			{
+				Name:           opts.packagePolicyName,
+				RootPath:       opts.packageRootPath,
+				DataStreamName: opts.dataStreamName,
+				TemplateName:   templateName,
 			},
 		},
+	}
+
+	return &policyResource, resources.Resources{
+		&policyResource,
 		&resources.FleetPackage{
 			RootPath: r.options.PackageRootPath,
 			Absent:   !opts.installedPackage,
@@ -433,11 +450,6 @@ func (r *runner) tearDownTest(ctx context.Context) error {
 		}
 	}
 
-	state, err := r.readServiceStateData()
-	if err != nil {
-		return fmt.Errorf("failed to read state during tear down: %w", err)
-	}
-
 	// Avoid cancellations during cleanup.
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -469,15 +481,11 @@ func (r *runner) tearDownTest(ctx context.Context) error {
 		r.deleteTestPolicyHandler = nil
 	}
 
-	resourcesOptions := resourcesOptions{
-		policyName: state.CurrentPolicy.Name,
-		policyID:   state.CurrentPolicy.ID,
-		// Keep it installed only if we were running setup, or tests only.
-		installedPackage: r.options.RunSetup || r.options.RunTestsOnly,
-	}
-	_, err = r.resourcesManager.ApplyCtx(cleanupCtx, r.resources(resourcesOptions))
-	if err != nil {
-		return err
+	if r.cleanupResources != nil {
+		if err := r.cleanupResources(cleanupCtx); err != nil {
+			return err
+		}
+		r.cleanupResources = nil
 	}
 
 	if r.shutdownServiceHandler != nil {
@@ -887,20 +895,8 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 	}
 	serviceOptions.DeployIndependentAgent = r.options.RunIndependentElasticAgent
 
-	policyTemplateName := config.PolicyTemplate
-	if policyTemplateName == "" {
-		policyTemplateName, err = findPolicyTemplateForInput(*scenario.pkgManifest, *scenario.dataStreamManifest, config.Input)
-		if err != nil {
-			return nil, fmt.Errorf("failed to determine the associated policy_template: %w", err)
-		}
-	}
-	scenario.policyTemplateName = policyTemplateName
-
-	policyTemplate, err := selectPolicyTemplateByName(scenario.pkgManifest.PolicyTemplates, scenario.policyTemplateName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find the selected policy_template: %w", err)
-	}
-
+	//TODO: Is this used?
+	//scenario.policyTemplateName = policyTemplateName
 	testTime := time.Now().Format("20060102T15:04:05Z")
 	policyToTestName := fmt.Sprintf("ep-test-system-%s-%s-%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream, testTime)
 	policyToEnrollName := fmt.Sprintf("ep-test-system-enroll-%s-%s-%s", r.options.TestFolder.Package, r.options.TestFolder.DataStream, testTime)
@@ -943,6 +939,7 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 		return nil, fmt.Errorf("unable to reload system test case configuration: %w", err)
 	}
 
+	policyID := serviceStateData.CurrentPolicy.ID
 	if r.options.RunTearDown {
 		logger.Debug("Skip installing package")
 	} else {
@@ -950,17 +947,45 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 		// installed.
 		logger.Debug("Installing package...")
 		resourcesOptions := resourcesOptions{
-			policyName: policyToTestName,
-			policyID:   serviceStateData.CurrentPolicy.ID,
+			testConfig:        config,
+			policyName:        policyToTestName,
+			policyID:          serviceStateData.CurrentPolicy.ID,
+			packagePolicyName: scenario.pkgManifest.Name + "-1",
+			packageRootPath:   r.options.PackageRootPath,
 			// Install it unless we are running the tear down only.
 			installedPackage: !r.options.RunTearDown,
 		}
-		_, err = r.resourcesManager.ApplyCtx(ctx, r.resources(resourcesOptions))
+		if scenario.pkgManifest.Type == "integration" {
+			resourcesOptions.dataStreamName = scenario.dataStreamManifest.Name
+		}
+		// TODO: Implement some mechanism to get outputs from apply results.
+		policyResource, resources := r.resources(resourcesOptions)
+		_, err := r.resourcesManager.ApplyCtx(ctx, resources)
 		if err != nil {
 			return nil, fmt.Errorf("can't install the package: %w", err)
 		}
+		r.cleanupResources = func(ctx context.Context) error {
+			resourcesOptions.policyID = policyResource.ID
+			resourcesOptions.installedPackage = r.options.RunSetup || r.options.RunTestsOnly
+			_, resources := r.resources(resourcesOptions)
+			_, err := r.resourcesManager.ApplyCtx(ctx, resources)
+			return err
+		}
+		policyID = policyResource.ID
 	}
 
+	policyToTest, err := r.options.KibanaClient.GetPolicy(ctx, policyID)
+	if err != nil {
+		return nil, fmt.Errorf("can't find the policy to test, with id %q: %w", policyID, err)
+	}
+	packagePolicies, err := r.options.KibanaClient.GetPackagePolicies(ctx, policyID)
+	if err != nil {
+		return nil, fmt.Errorf("can't find package policies for policy %q: %w", policyID, err)
+	}
+	if n := len(packagePolicies); n != 1 {
+		return nil, fmt.Errorf("expected one package policy for policy %q, found %d", policyID, n)
+	}
+	ds := packagePolicies[0]
 	scenario.kibanaDataStream = ds
 
 	// store the time just before adding the Test Policy, this time will be used to check
@@ -1024,7 +1049,7 @@ func (r *runner) prepareScenario(ctx context.Context, config *testConfig, svcInf
 			if err != nil {
 				return fmt.Errorf("failed to remove agent %q: %w", agent.ID, err)
 			}
-			if err := r.options.KibanaClient.DeletePolicy(ctx, *policyToEnroll); err != nil {
+			if err := r.options.KibanaClient.DeletePolicy(ctx, policyToEnroll.ID); err != nil {
 				return fmt.Errorf("error cleaning up test policy: %w", err)
 			}
 			return nil
@@ -1474,6 +1499,14 @@ func (r *runner) validateTestScenario(ctx context.Context, result *testrunner.Re
 	return result.WithSuccess()
 }
 
+// XXX: Duplicated in resources.
+func getDataStreamDataset(pkg packages.PackageManifest, ds packages.DataStreamManifest) string {
+	if len(ds.Dataset) > 0 {
+		return ds.Dataset
+	}
+	return fmt.Sprintf("%s.%s", pkg.Name, ds.Name)
+}
+
 func (r *runner) runTest(ctx context.Context, config *testConfig, svcInfo servicedeployer.ServiceInfo) ([]testrunner.TestResult, error) {
 	result := r.newResult(config.Name())
 
@@ -1521,92 +1554,6 @@ func checkEnrolledAgents(ctx context.Context, client *kibana.Client, agentInfo a
 		return nil, errors.New("no agent enrolled in time")
 	}
 	return agents, nil
-}
-
-func createPackageDatastream(
-	kibanaPolicy kibana.Policy,
-	pkg packages.PackageManifest,
-	policyTemplate packages.PolicyTemplate,
-	ds packages.DataStreamManifest,
-	config testConfig,
-) kibana.PackageDataStream {
-	if pkg.Type == "input" {
-		return createInputPackageDatastream(kibanaPolicy, pkg, policyTemplate, config)
-	}
-	return createIntegrationPackageDatastream(kibanaPolicy, pkg, policyTemplate, ds, config)
-}
-
-func createInputPackageDatastream(
-	kibanaPolicy kibana.Policy,
-	pkg packages.PackageManifest,
-	policyTemplate packages.PolicyTemplate,
-	config testConfig,
-) kibana.PackageDataStream {
-	r := kibana.PackageDataStream{
-		Name:      fmt.Sprintf("%s-%s", pkg.Name, policyTemplate.Name),
-		Namespace: "ep",
-		PolicyID:  kibanaPolicy.ID,
-		Enabled:   true,
-	}
-	r.Package.Name = pkg.Name
-	r.Package.Title = pkg.Title
-	r.Package.Version = pkg.Version
-	r.Inputs = []kibana.Input{
-		{
-			PolicyTemplate: policyTemplate.Name,
-			Enabled:        true,
-			Vars:           kibana.Vars{},
-		},
-	}
-
-	streamInput := policyTemplate.Input
-	r.Inputs[0].Type = streamInput
-
-	dataset := fmt.Sprintf("%s.%s", pkg.Name, policyTemplate.Name)
-	streams := []kibana.Stream{
-		{
-			ID:      fmt.Sprintf("%s-%s.%s", streamInput, pkg.Name, policyTemplate.Name),
-			Enabled: true,
-			DataStream: kibana.DataStream{
-				Type:    policyTemplate.Type,
-				Dataset: dataset,
-			},
-		},
-	}
-
-	// Add policyTemplate-level vars.
-	vars := setKibanaVariables(policyTemplate.Vars, config.Vars)
-	if _, found := vars["data_stream.dataset"]; !found {
-		var value packages.VarValue
-		value.Unpack(dataset)
-		vars["data_stream.dataset"] = kibana.Var{
-			Value: value,
-			Type:  "text",
-		}
-	}
-
-	streams[0].Vars = vars
-	r.Inputs[0].Streams = streams
-	return r
-}
-
-func setKibanaVariables(definitions []packages.Variable, values common.MapStr) kibana.Vars {
-	vars := kibana.Vars{}
-	for _, definition := range definitions {
-		val := definition.Default
-
-		value, err := values.GetValue(definition.Name)
-		if err == nil {
-			val = packages.VarValue{}
-			val.Unpack(value)
-		}
-
-		vars[definition.Name] = kibana.Var{
-			Type:  definition.Type,
-			Value: val,
-		}
-	}
-	return vars
 }
 
 func (r *runner) checkTransforms(ctx context.Context, config *testConfig, pkgManifest *packages.PackageManifest, ds kibana.PackageDataStream, dataStream string) error {

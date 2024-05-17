@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/elastic/elastic-package/internal/packages"
 )
@@ -82,6 +83,39 @@ func (c *Client) GetPolicy(ctx context.Context, policyID string) (*Policy, error
 	}
 
 	return &resp.Item, nil
+}
+
+// GetPackagePolicies fetches the list of package policies. If an agent policy ID is provided, it gets the package policies
+// linked to the given agent policy ID.
+func (c *Client) GetPackagePolicies(ctx context.Context, agentPolicyID string) ([]PackageDataStream, error) {
+	// GET kbn:/api/fleet/package_policies?kuery=ingest-package-policies.policy_id:fleet-server-policy
+	policiesURL := fmt.Sprintf("%s/package_policies", FleetAPI)
+	if agentPolicyID != "" {
+		values := make(url.Values)
+		values.Set("kuery", fmt.Sprintf("%s:%s", "ingest-package-policies.policy_id", agentPolicyID))
+		policiesURL += "?" + values.Encode()
+	}
+
+	statusCode, respBody, err := c.get(ctx, policiesURL)
+	if err != nil {
+		return nil, fmt.Errorf("could not get policy: %w", err)
+	}
+	if statusCode == http.StatusNotFound {
+		return nil, &ErrPolicyNotFound{id: agentPolicyID}
+	}
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("could not get policy; API status code = %d; response body = %s", statusCode, respBody)
+	}
+
+	var resp struct {
+		Items []PackageDataStream `json:"items"`
+	}
+
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("could not parse package policies (response) from JSON: %w", err)
+	}
+
+	return resp.Items, nil
 }
 
 // GetRawPolicy fetches the given Policy with all the fields in Fleet.
