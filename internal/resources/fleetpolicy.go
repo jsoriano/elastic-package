@@ -111,6 +111,10 @@ func (f *FleetAgentPolicy) Get(ctx resource.Context) (current resource.ResourceS
 	}
 
 	policy, err := provider.Client.GetPolicy(ctx, f.ID)
+	var notFoundError *kibana.ErrPolicyNotFound
+	if errors.As(err, &notFoundError) {
+		return &state, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("could not get policy %q with id %q: %w", f.Name, f.ID, err)
 	}
@@ -126,6 +130,7 @@ func (f *FleetAgentPolicy) Create(ctx resource.Context) error {
 	}
 
 	policy, err := provider.Client.CreatePolicy(ctx, kibana.Policy{
+		ID:           f.ID,
 		Name:         f.Name,
 		Namespace:    f.Namespace,
 		Description:  f.Description,
@@ -168,7 +173,7 @@ func createPackagePolicy(policy FleetAgentPolicy, packagePolicy FleetPackagePoli
 
 func createIntegrationPackagePolicy(policy FleetAgentPolicy, manifest packages.PackageManifest, packagePolicy FleetPackagePolicy) (*kibana.PackageDataStream, error) {
 	if packagePolicy.DataStreamName == "" {
-		return nil, fmt.Errorf("expected data stream integration package policy %q", packagePolicy.Name)
+		return nil, fmt.Errorf("expected data stream for integration package policy %q", packagePolicy.Name)
 	}
 
 	dsManifest, err := packages.ReadDataStreamManifestFromPackageRoot(packagePolicy.RootPath, packagePolicy.DataStreamName)
@@ -178,13 +183,14 @@ func createIntegrationPackagePolicy(policy FleetAgentPolicy, manifest packages.P
 
 	policyTemplateName := packagePolicy.TemplateName
 	if policyTemplateName == "" {
-		policyTemplateName, err = findPolicyTemplateForInput(manifest, *dsManifest, packagePolicy.InputName)
+		name, err := findPolicyTemplateForDataStream(manifest, *dsManifest, packagePolicy.InputName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to determine the associated policy_template: %w", err)
 		}
+		policyTemplateName = name
 	}
 
-	policyTemplate, err := selectPolicyTemplateByName(manifest.PolicyTemplates, packagePolicy.TemplateName)
+	policyTemplate, err := selectPolicyTemplateByName(manifest.PolicyTemplates, policyTemplateName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find the selected policy_template: %w", err)
 	}
@@ -237,7 +243,70 @@ func createIntegrationPackagePolicy(policy FleetAgentPolicy, manifest packages.P
 }
 
 func createInputPackagePolicy(policy FleetAgentPolicy, manifest packages.PackageManifest, packagePolicy FleetPackagePolicy) (*kibana.PackageDataStream, error) {
-	return nil, errors.New("not implemented")
+	if dsName := packagePolicy.DataStreamName; dsName != "" {
+		return nil, fmt.Errorf("no data stream expected for input package policy %q, found %q", packagePolicy.Name, dsName)
+	}
+
+	policyTemplateName := packagePolicy.TemplateName
+	if policyTemplateName == "" {
+		name, err := findPolicyTemplateForInputPackage(manifest, packagePolicy.InputName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine the associated policy_template: %w", err)
+		}
+		policyTemplateName = name
+	}
+
+	policyTemplate, err := selectPolicyTemplateByName(manifest.PolicyTemplates, policyTemplateName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find the selected policy_template: %w", err)
+	}
+
+	ds := kibana.PackageDataStream{
+		Name:      packagePolicy.Name,
+		Namespace: policy.Namespace,
+		PolicyID:  policy.ID,
+		Enabled:   !packagePolicy.Disabled,
+		Inputs: []kibana.Input{
+			{
+				PolicyTemplate: policyTemplate.Name,
+				Enabled:        !packagePolicy.Disabled,
+			},
+		},
+	}
+	ds.Package.Name = manifest.Name
+	ds.Package.Title = manifest.Title
+	ds.Package.Version = manifest.Version
+
+	streamInput := policyTemplate.Input
+	ds.Inputs[0].Type = streamInput
+
+	dataset := fmt.Sprintf("%s.%s", manifest.Name, policyTemplate.Name)
+	streams := []kibana.Stream{
+		{
+			ID:      fmt.Sprintf("%s-%s.%s", streamInput, manifest.Name, policyTemplate.Name),
+			Enabled: !packagePolicy.Disabled,
+			DataStream: kibana.DataStream{
+				Type:    policyTemplate.Type,
+				Dataset: dataset,
+			},
+		},
+	}
+
+	// Add policyTemplate-level vars.
+	vars := setKibanaVariables(policyTemplate.Vars, common.MapStr(packagePolicy.Vars))
+	if _, found := vars["data_stream.dataset"]; !found {
+		var value packages.VarValue
+		value.Unpack(dataset)
+		vars["data_stream.dataset"] = kibana.Var{
+			Value: value,
+			Type:  "text",
+		}
+	}
+
+	streams[0].Vars = vars
+	ds.Inputs[0].Streams = streams
+
+	return &ds, nil
 }
 
 func setKibanaVariables(definitions []packages.Variable, values common.MapStr) kibana.Vars {
@@ -266,7 +335,7 @@ func (f *FleetAgentPolicy) Update(ctx resource.Context) error {
 			return err
 		}
 
-		err = provider.Client.DeletePolicy(ctx, kibana.Policy{ID: f.ID})
+		err = provider.Client.DeletePolicy(ctx, f.ID)
 		if err != nil {
 			return fmt.Errorf("could not delete policy %q: %w", f.Name, err)
 		}
@@ -288,7 +357,7 @@ func (s *FleetAgentPolicyState) Found() bool {
 
 func (s *FleetAgentPolicyState) NeedsUpdate(resource resource.Resource) (bool, error) {
 	policy := resource.(*FleetAgentPolicy)
-	return policy.Absent == (s.current == nil), nil
+	return policy.Absent == (s.current != nil), nil
 }
 
 // getDataStreamIndex returns the index of the data stream whose input name
@@ -307,16 +376,6 @@ func getDataStreamDataset(pkg packages.PackageManifest, ds packages.DataStreamMa
 		return ds.Dataset
 	}
 	return fmt.Sprintf("%s.%s", pkg.Name, ds.Name)
-}
-
-// findPolicyTemplateForInput returns the name of the policy_template that
-// applies to the input under test. An error is returned if no policy template
-// matches or if multiple policy templates match and the response is ambiguous.
-func findPolicyTemplateForInput(pkg packages.PackageManifest, ds packages.DataStreamManifest, inputName string) (string, error) {
-	if pkg.Type == "input" {
-		return findPolicyTemplateForInputPackage(pkg, inputName)
-	}
-	return findPolicyTemplateForDataStream(pkg, ds, inputName)
 }
 
 func findPolicyTemplateForDataStream(pkg packages.PackageManifest, ds packages.DataStreamManifest, inputName string) (string, error) {
