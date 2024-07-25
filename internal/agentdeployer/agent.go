@@ -44,8 +44,8 @@ var staticSource = resource.NewSourceFS(static)
 // CustomAgentDeployer knows how to deploy a custom elastic-agent defined via
 // a Docker Compose file.
 type DockerComposeAgentDeployer struct {
-	profile      *profile.Profile
-	stackVersion string
+	profile *profile.Profile
+	version string
 
 	policyName string
 
@@ -59,9 +59,9 @@ type DockerComposeAgentDeployer struct {
 }
 
 type DockerComposeAgentDeployerOptions struct {
-	Profile      *profile.Profile
-	StackVersion string
-	PolicyName   string
+	Profile    *profile.Profile
+	Version    string
+	PolicyName string
 
 	PackageName string
 	DataStream  string
@@ -87,7 +87,7 @@ var _ DeployedAgent = new(dockerComposeDeployedAgent)
 func NewCustomAgentDeployer(options DockerComposeAgentDeployerOptions) (*DockerComposeAgentDeployer, error) {
 	return &DockerComposeAgentDeployer{
 		profile:      options.Profile,
-		stackVersion: options.StackVersion,
+		version:      options.Version,
 		packageName:  options.PackageName,
 		dataStream:   options.DataStream,
 		policyName:   options.PolicyName,
@@ -112,7 +112,7 @@ func (d *DockerComposeAgentDeployer) SetUp(ctx context.Context, agentInfo AgentI
 	}
 
 	env := append(
-		appConfig.StackImageRefs(d.stackVersion).AsEnv(),
+		appConfig.StackImageRefs(d.version).AsEnv(),
 		fmt.Sprintf("%s=%s", serviceLogsDirEnv, agentInfo.Logs.Folder.Local),
 		fmt.Sprintf("%s=%s", localCACertEnv, caCertPath),
 		fmt.Sprintf("%s=%s", fleetPolicyEnv, d.policyName),
@@ -257,7 +257,7 @@ func (d *DockerComposeAgentDeployer) installDockerCompose(agentInfo AgentInfo) (
 
 	fleetURL := "https://fleet-server:8220"
 	kibanaHost := "https://kibana:5601"
-	stackVersion := d.stackVersion
+	stackVersion := d.version
 	if config.Provider == stack.ProviderServerless {
 		fleetURL = config.Parameters[stack.ParamServerlessFleetURL]
 		kibanaHost = config.KibanaHost

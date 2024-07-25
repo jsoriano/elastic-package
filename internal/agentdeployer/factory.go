@@ -27,7 +27,7 @@ type FactoryOptions struct {
 	DataStreamRootPath string
 	DevDeployDir       string
 	Type               string
-	StackVersion       string
+	Version            string
 	PolicyName         string
 
 	PackageName string
@@ -53,7 +53,7 @@ func Factory(options FactoryOptions) (AgentDeployer, error) {
 		}
 		opts := DockerComposeAgentDeployerOptions{
 			Profile:      options.Profile,
-			StackVersion: options.StackVersion,
+			Version:      options.Version,
 			PackageName:  options.PackageName,
 			PolicyName:   options.PolicyName,
 			DataStream:   options.DataStream,
@@ -68,7 +68,7 @@ func Factory(options FactoryOptions) (AgentDeployer, error) {
 	case "k8s":
 		opts := KubernetesAgentDeployerOptions{
 			Profile:      options.Profile,
-			StackVersion: options.StackVersion,
+			StackVersion: options.Version,
 			PolicyName:   options.PolicyName,
 			DataStream:   options.DataStream,
 			RunSetup:     options.RunSetup,

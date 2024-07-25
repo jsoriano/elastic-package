@@ -365,13 +365,14 @@ type resourcesOptions struct {
 }
 
 func (r *tester) createAgentOptions(policyName string) agentdeployer.FactoryOptions {
+	version := r.stackVersion.Version()
 	return agentdeployer.FactoryOptions{
 		Profile:            r.profile,
 		PackageRootPath:    r.packageRootPath,
 		DataStreamRootPath: r.dataStreamPath,
 		DevDeployDir:       DevDeployDir,
 		Type:               agentdeployer.TypeTest,
-		StackVersion:       r.stackVersion.Version(),
+		Version:            version,
 		PackageName:        r.testFolder.Package,
 		DataStream:         r.testFolder.DataStream,
 		PolicyName:         policyName,
